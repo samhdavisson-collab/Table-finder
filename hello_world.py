@@ -11,7 +11,7 @@ body {
 """,
     unsafe_allow_html=True,
 )
-st.title("TableFinder 3.0")
+st.title("TableFinder")
 "by Sam Davisson"
 if "name_val" not in st.session_state:
      st.session_state.name_val = ""
