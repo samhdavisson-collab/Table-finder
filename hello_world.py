@@ -1,11 +1,20 @@
 import streamlit as st
 import csv
 
+st.markdown(
+    """
+<style>
+body {
+    overflow-y: scroll; /* Always show the vertical scrollbar */
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
 st.title("TableFinder 3.0")
 "by Sam Davisson"
 if "name_val" not in st.session_state:
      st.session_state.name_val = ""
-     print(f"[{st.session_state.name_val}]")
 guests = []
 with open('data.csv', mode='r', newline='', encoding='utf-8') as file:
     reader = csv.DictReader(file)
