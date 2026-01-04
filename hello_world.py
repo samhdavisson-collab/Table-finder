@@ -1,5 +1,6 @@
 import streamlit as st
 import csv
+import random_name_generator
 
 st.markdown(
     """
@@ -15,6 +16,7 @@ st.title("TableFinder")
 "by Sam Davisson"
 if "name_val" not in st.session_state:
      st.session_state.name_val = ""
+     random_name_generator.set_values()
 guests = []
 with open('data.csv', mode='r', newline='', encoding='utf-8') as file:
     reader = csv.DictReader(file)
