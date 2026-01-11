@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+data.csv
+r2_test.py
+help.py
+secrets
+random_name_generator.py
+
+# Streamlit secrets
+.streamlit/secrets.toml
+
+# Local files
+.DS_Store

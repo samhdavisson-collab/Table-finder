@@ -1,34 +1,16 @@
 import streamlit as st
-import csv
-import os
+import pandas as pd
+import boto3
 import uuid
 import json
-import qrcode
-from PIL import Image
-import io
-import secrets
 import time
-import pandas as pd
-
-# -----------------------
-# Setup
-# -----------------------
-EVENTS_DIR = "events"
-os.makedirs(EVENTS_DIR, exist_ok=True)
-
-# For local testing; replace with deployed URL when live
-BASE_URL = "https://table-finder.streamlit.app"
-
-# -----------------------
-# Get event_id and token from URL query parameters
-# -----------------------
-event_id = st.query_params.get("event")
-if isinstance(event_id, list):
-    event_id = event_id[0]
-
-token_param = st.query_params.get("token")
-if isinstance(token_param, list):
-    token_param = token_param[0]
+import secrets
+import csv
+import io
+import qrcode
+# from PIL import Image
+from difflib import SequenceMatcher
+import time
 
 st.markdown(
     """
@@ -41,211 +23,495 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# -----------------------
+# CONFIG
+# -----------------------
+BASE_URL = "http://localhost:8501"  # replace with your deployed URL
+BUCKET = st.secrets["R2_BUCKET"]
+
+# -----------------------
+# R2 CLIENT
+# -----------------------
+s3 = boto3.client(
+    "s3",
+    endpoint_url=f"https://{st.secrets['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
+    aws_access_key_id=st.secrets["R2_ACCESS_KEY_ID"],
+    aws_secret_access_key=st.secrets["R2_SECRET_ACCESS_KEY"],
+    region_name="auto",
+)
+
+# -----------------------
+# HELPERS
+# -----------------------
+def r2_key(event_id, name):
+    return f"events/{event_id}/{name}"
+
+def r2_exists(key):
+    try:
+        s3.head_object(Bucket=BUCKET, Key=key)
+        return True
+    except:
+        return False
+
+def r2_delete_event(event_id):
+    objs = s3.list_objects_v2(Bucket=BUCKET, Prefix=f"events/{event_id}/")
+    if "Contents" in objs:
+        s3.delete_objects(
+            Bucket=BUCKET,
+            Delete={"Objects": [{"Key": o["Key"]} for o in objs["Contents"]]},
+        )
+
+def similarity(a: str, b: str) -> float:
+    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
+
+def find_by_last_name_fuzzy(last_name, threshold=0.75, limit=5):
+    results = []
+    for g in guests:
+        score = similarity(last_name, g["last_name"])
+        if score >= threshold:
+            results.append((score, g))
+    results.sort(reverse=True, key=lambda x: x[0])
+    return [g for _, g in results[:limit]]
+
+def find_by_first_name_fuzzy(first_name, threshold=0.75, limit=5):
+    results = []
+    for g in guests:
+        score = similarity(first_name, g["first_name"])
+        if score >= threshold:
+            results.append((score, g))
+    results.sort(reverse=True, key=lambda x: x[0])
+    return [g for _, g in results[:limit]]
+
+# -----------------------
+# QUERY PARAMS
+# -----------------------
+event_id = st.query_params.get("event")
+token = st.query_params.get("token")
+if isinstance(event_id, list): event_id = event_id[0]
+if isinstance(token, list): token = token[0]
+
 st.title("TableFinder")
 st.caption("by Sam Davisson")
 
-# -----------------------
-# CREATE EVENT MODE
-# -----------------------
+# ============================================================
+# CREATE EVENT
+# ============================================================
 if not event_id:
-    st.header("Create an Event")
+    st.header("Home")
 
-    # Event title input
-    event_title_input = st.text_input(
-        "Event title",
-        placeholder="",
-        key="event_title_input"
+    create, adminpage, help = st.tabs(["Create an event", "Admin Login", "Instructions"], default="Instructions")
+    with help:
+        st.header("Instructions")
+        st.markdown("""
+        **Welcome to TableFinder!**  
+
+        Here's how to use the app:
+
+        1. **Create an Event**
+           - Go to the 'Create an Event' tab.
+           - Enter your event title.
+           - Upload a CSV with your guests. The CSV should include first name, last name, and table columns (any column names are fine; you will map them).
+           - Click 'Create Event' to generate your event.
+           - A QR code and guest/admin links will be generated automatically.
+           - Download your Admin File to recover the event later if needed.
+
+        2. **Admin Page**
+           - Use the admin link or upload your Admin File in the 'Admin Login' tab.
+           - Edit guest lists, tables, or event title.
+           - Download the guest CSV or QR code at any time.
+           - Delete the event if needed (permanent).
+
+        3. **Guest Lookup**
+           - Guests can use the QR code or guest link.
+           - Search by first or last name.
+           - See their table assignments.
+
+        **Tips:**
+        - Always keep your Admin File safe.
+        - Column mapping is remembered if you upload a new CSV later.
+        - Tables can be numbers or names (like "A", "B", "Family Table").
+        """)
+    with adminpage:
+        uploaded_safe = st.file_uploader("Upload admin recover file", type="json")
+
+        if uploaded_safe:
+            safe_data = json.load(uploaded_safe)
+            st.query_params["event"] = safe_data["event_id"]
+            st.query_params["token"] = safe_data["creator_token"]
+            st.rerun()
+    with create:
+        title = st.text_input("Event title")
+        uploaded = st.file_uploader("Upload guest list", type="csv")
+        "Or"
+        blank = st.checkbox("Create a blank list")
+
+        if blank:
+            df = pd.DataFrame(columns=["first_name", "last_name", "table"])
+            # if st.button("Create Event"):
+            #     event_id = uuid.uuid4().hex[:6]
+            #     creator_token = secrets.token_hex(4)
+            #
+            #     # Save CSV to R2
+            #     s3.put_object(
+            #         Bucket=BUCKET,
+            #         Key=r2_key(event_id, "guests.csv"),
+            #         Body=df.to_csv(index=False),
+            #     )
+            #
+            #     # Save metadata with column mapping
+            #     meta = {
+            #         "title": title or "Untitled Event",
+            #         "created": time.time(),
+            #         "creator_token": creator_token,
+            #         "column_mapping": {
+            #             "first_name": "first_name",
+            #             "last_name": "last_name",
+            #             "table": "table"
+            #         },
+            #         "table_prefix": "Table"
+            #     }
+            #     s3.put_object(
+            #         Bucket=BUCKET,
+            #         Key=r2_key(event_id, "meta.json"),
+            #         Body=json.dumps(meta),
+            #     )
+            #
+            #     # Generate URLs
+            #     guest_url = f"{BASE_URL}/?event={event_id}"
+            #     admin_url = f"{BASE_URL}/?event={event_id}&token={creator_token}"
+            #
+            #     # QR code
+            #     qr = qrcode.make(guest_url)
+            #     buf = io.BytesIO()
+            #     qr.save(buf, format="PNG")
+            #     buf.seek(0)
+            #
+            #     # Display QR and links
+            #     st.success("Event created!")
+            #     st.image(buf, width=250)
+            #     st.download_button(
+            #         label="Download QR code",
+            #         data=buf.getvalue(),
+            #         file_name="qr.png",
+            #         mime="image/png"
+            #     )
+            #     st.markdown(f"**Guest link:** {guest_url}")
+            #     st.markdown(f"**Admin link:** {admin_url}")
+            #
+            #     # Generate safe file
+            #     safe_file = {
+            #         "event_id": event_id,
+            #         "creator_token": creator_token,
+            #         "title": meta["title"],
+            #         "table_prefix": meta["table_prefix"]
+            #     }
+            #     safe_bytes = json.dumps(safe_file, indent=2).encode("utf-8")
+            #     st.download_button(
+            #         label="Download Admin File",
+            #         data=safe_bytes,
+            #         file_name=f"event_{event_id}_admin.json",
+            #         mime="application/json"
+            #     )
+            #
+            #     # Redirect to admin page
+            #     st.query_params["event"] = event_id
+            #     st.query_params["token"] = creator_token
+            #     st.rerun()
+
+        if blank or uploaded:
+            # -----------------------
+            # Map columns
+            # -----------------------
+            if uploaded:
+                df = pd.read_csv(uploaded)
+                st.write("Detected columns:", list(df.columns))
+                first_col = st.selectbox("Select the first name column:", df.columns, index=0)
+                last_col = st.selectbox("Select the last name column:", df.columns, index=1)
+                table_col = st.selectbox("Select the table column:", df.columns, index=2)
+
+                # Rename columns internally
+                df = df.rename(columns={
+                    first_col: "first_name",
+                    last_col: "last_name",
+                    table_col: "table"
+                })
+
+                if "table" in df.columns:
+                    df["table"] = df["table"].astype(str)
+                df = df.reset_index(drop=True)
+
+            if st.button("Create Event"):
+                event_id = uuid.uuid4().hex[:6]
+                creator_token = secrets.token_hex(4)
+
+                # Save CSV to R2
+                s3.put_object(
+                    Bucket=BUCKET,
+                    Key=r2_key(event_id, "guests.csv"),
+                    Body=df.to_csv(index=False),
+                )
+
+                # Save metadata with column mapping
+                if uploaded:
+                    meta = {
+                        "title": title or "Untitled Event",
+                        "created": time.time(),
+                        "creator_token": creator_token,
+                        "column_mapping": {
+                            "first_name": first_col,
+                            "last_name": last_col,
+                            "table": table_col
+                        },
+                        "table_prefix": "Table"
+                    }
+                else:
+                    meta = {
+                                "title": title or "Untitled Event",
+                                "created": time.time(),
+                                "creator_token": creator_token,
+                                "column_mapping": {
+                                    "first_name": "first_name",
+                                    "last_name": "last_name",
+                                    "table": "table"
+                                },
+                                "table_prefix": "Table"
+                            }
+                s3.put_object(
+                    Bucket=BUCKET,
+                    Key=r2_key(event_id, "meta.json"),
+                    Body=json.dumps(meta),
+                )
+
+                # Generate URLs
+                guest_url = f"{BASE_URL}/?event={event_id}"
+                admin_url = f"{BASE_URL}/?event={event_id}&token={creator_token}"
+
+                # QR code
+                qr = qrcode.make(guest_url)
+                buf = io.BytesIO()
+                qr.save(buf, format="PNG")
+                buf.seek(0)
+
+                # Display QR and links
+                st.success("Event created!")
+                st.image(buf, width=250)
+                st.download_button(
+                    label="Download QR code",
+                    data=buf.getvalue(),
+                    file_name="qr.png",
+                    mime="image/png"
+                )
+                st.markdown(f"**Guest link:** {guest_url}")
+                st.markdown(f"**Admin link:** {admin_url}")
+
+                # Generate safe file
+                safe_file = {
+                    "event_id": event_id,
+                    "creator_token": creator_token,
+                    "title": meta["title"],
+                    "table_prefix": meta["table_prefix"]
+                }
+                safe_bytes = json.dumps(safe_file, indent=2).encode("utf-8")
+                st.download_button(
+                    label="Download Admin File",
+                    data=safe_bytes,
+                    file_name=f"event_{event_id}_admin.json",
+                    mime="application/json"
+                )
+
+                # Redirect to admin page
+                st.query_params["event"] = event_id
+                st.query_params["token"] = creator_token
+                st.rerun()
+
+# ============================================================
+# LOAD EVENT
+# ============================================================
+csv_key = r2_key(event_id, "guests.csv")
+meta_key = r2_key(event_id, "meta.json")
+
+if not r2_exists(csv_key) or not r2_exists(meta_key):
+    st.stop()
+
+meta = json.loads(s3.get_object(Bucket=BUCKET, Key=meta_key)["Body"].read())
+is_admin = token == meta["creator_token"]
+
+st.header(meta["title"])
+st.caption(f"Event ID: {event_id}")
+
+# ============================================================
+# ADMIN PAGE
+# ============================================================
+if is_admin:
+    st.warning("Creator/Admin Page")
+
+    # Download admin safe file
+
+    "Use this to recover this page if you accidentally close it"
+    safe_file = {
+        "event_id": event_id,
+        "creator_token": token,
+        "title": meta.get("title", "Untitled Event"),
+        "table_prefix": meta.get("table_prefix", "Table")
+    }
+    safe_bytes = json.dumps(safe_file, indent=2).encode("utf-8")
+    st.download_button(
+        label="Download Admin Recover File",
+        data=safe_bytes,
+        file_name=f"event_{event_id}_admin.json",
+        mime="application/json"
     )
 
-    # CSV uploader
-    uploaded = st.file_uploader(
-        "Upload your guest list (CSV)",
-        type="csv"
-    )
 
-    if uploaded:
-        # Generate unique event ID
-        event_id = uuid.uuid4().hex[:6]
-
-        # Generate creator token
-        creator_token = secrets.token_hex(4)
-
-        # Save CSV
-        csv_path = os.path.join(EVENTS_DIR, f"{event_id}.csv")
-        with open(csv_path, "wb") as f:
-            f.write(uploaded.getbuffer())
-
-        # Ensure 'table' column is string
-        df = pd.read_csv(csv_path)
-        if "table" in df.columns:
-            df["table"] = df["table"].astype(str)
-            df.to_csv(csv_path, index=False)
-
-        # Save metadata (title, created timestamp, creator token)
-        meta = {
-            "title": event_title_input.strip() or "Untitled Event",
-            "created": time.time(),
-            "creator_token": creator_token
-        }
-        meta_path = os.path.join(EVENTS_DIR, f"{event_id}.json")
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(meta, f)
-
-        st.success("Event created!")
-
-        # Generate full URLs
+    share = st.expander("Share event")
+    with share:
+        # Guest URL & QR
         guest_url = f"{BASE_URL}/?event={event_id}"
-        admin_url = f"{BASE_URL}/?event={event_id}&token={creator_token}"
-
-        # -----------------------
-        # Generate QR code for guests
-        # -----------------------
-        qr = qrcode.QRCode(version=1, box_size=10, border=4)
-        qr.add_data(guest_url)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white")
-
+        qr = qrcode.make(guest_url)
         buf = io.BytesIO()
-        img.save(buf, format="PNG")
+        qr.save(buf, format="PNG")
         buf.seek(0)
-
-        st.markdown("### Guest Lookup Ready")
-        st.markdown("**Scan this QR code to access the guest lookup:**")
-        st.image(buf, caption="Scan QR code", width=250)
+        st.image(buf, width=250)
         st.download_button(
             label="Download QR code",
             data=buf.getvalue(),
-            file_name=f"event_{event_id}_qr.png",
+            file_name="qr.png",
             mime="image/png"
         )
-        st.markdown(f"[Or click here to open]({guest_url})")
-        st.markdown(f"**Creator/admin page:** [Click here]({admin_url})")
+        "Guest Link"
+        st.code(guest_url, language="txt")
 
-    st.stop()  # Stop execution so guest lookup code doesn't run
+    event_data = st.expander("Edit event")
+    with event_data:
+        # Edit event title
+        new_title = st.text_input("Edit event title:", value=meta["title"])
+        if new_title != meta["title"]:
+            meta["title"] = new_title
+            s3.put_object(
+                Bucket=BUCKET,
+                Key=meta_key,
+                Body=json.dumps(meta),
+            )
+            st.success("Event title updated!")
+            st.rerun()
 
-# -----------------------
-# LOAD EVENT
-# -----------------------
-csv_path = os.path.join(EVENTS_DIR, f"{event_id}.csv")
-meta_path = os.path.join(EVENTS_DIR, f"{event_id}.json")
+        # Load CSV
+        if "df" not in st.session_state:
+            csv_data = s3.get_object(Bucket=BUCKET, Key=csv_key)["Body"].read()
+            df = pd.read_csv(io.BytesIO(csv_data))
+            if "table" in df.columns:
+                df["table"] = df["table"].astype(str)
+            df = df.reset_index(drop=True)
+            st.session_state.df = df
 
-if not os.path.exists(csv_path) or not os.path.exists(meta_path):
-    st.error("Event not found.")
-    st.stop()
+        # Map internal to friendly column headers
+        friendly_cols = {"first_name": "First Name", "last_name": "Last Name", "table": "Table"}
+        df_friendly = st.session_state.df.rename(columns=friendly_cols)
 
-with open(meta_path, "r", encoding="utf-8") as f:
-    meta = json.load(f)
+        # -----------------------
+        # Apply table prefix in admin view
+        # -----------------------
+        table_prefix = meta.get("table_prefix", "Table")
+        # df_friendly["Table"] = df_friendly["Table"].apply(lambda x: f"{table_prefix} {x}" if x else "")
 
-event_title = meta.get("title", "Untitled Event")
-creator_token = meta.get("creator_token")
-is_creator = token_param == creator_token
+        # Editable guest list with table prefix
+        st.caption(
+            "You can enter full table names (e.g. 'Round Table') "
+            "or just numbers (e.g. '2'). "
+            "The prefix is only added for numbers."
+        )
+        df_friendly = df_friendly.reset_index(drop=True)
+        edited_friendly = st.data_editor(
+            df_friendly,
+            num_rows="dynamic",
+            hide_index=True,
+            key="guest_editor"
+        )
+        if st.button("Save changes"):
+            saving = st.toast("Saving...", icon="spinner")
+            edited_internal = edited_friendly.rename(
+                columns={v: k for k, v in friendly_cols.items()}
+            )
+            edited_internal = edited_internal.fillna("").astype(str)
+            edited_internal = edited_internal.reset_index(drop=True)
+            s3.put_object(
+                Bucket=BUCKET,
+                Key=csv_key,
+                Body=edited_internal.to_csv(index=False),
+            )
 
-# -----------------------
-# DISPLAY HEADER
-# -----------------------
-st.header(event_title)
-st.caption(f"Event ID: {event_id}")
+            st.session_state.df = edited_internal
+            time.sleep(0.5)
+            saving.toast("Saved!", icon="✅", duration=2)
 
-# -----------------------
-# CREATOR/ADMIN DASHBOARD
-# -----------------------
-if is_creator:
-    st.warning("You are viewing the creator/admin page for this event.")
+        # Replace CSV while remembering column mapping
+        uploaded_replace = st.file_uploader("Or upload a new CSV to replace guest list", type="csv")
+        if uploaded_replace:
+            df_new = pd.read_csv(uploaded_replace)
+            column_mapping = meta.get("column_mapping", {"first_name":"first_name","last_name":"last_name","table":"table"})
+            df_new = df_new.rename(columns={
+                column_mapping["first_name"]: "first_name",
+                column_mapping["last_name"]: "last_name",
+                column_mapping["table"]: "table"
+            })
+            if "table" in df_new.columns:
+                df_new["table"] = df_new["table"].astype(str)
+            df_new = df_new.reset_index(drop=True)
 
-    # Edit event title
-    new_title = st.text_input("Edit event title:", value=event_title, key="edit_event_title")
-    if new_title != event_title:
-        meta["title"] = new_title
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(meta, f)
-        st.success("Event title updated!")
-        event_title = new_title
+            s3.put_object(
+                Bucket=BUCKET,
+                Key=csv_key,
+                Body=df_new.to_csv(index=False)
+            )
+            st.session_state.df = df_new
+            st.success("Guest list replaced")
 
-    # Load guest list as DataFrame
-    df = pd.read_csv(csv_path)
-    if "table" in df.columns:
-        df["table"] = df["table"].astype(str)
-
-    # Editable guest list
-    st.markdown("### Edit Guest List")
-    edited_df = st.data_editor(df, num_rows="dynamic", key="edit_guest_list")
-
-    # Save changes if edited
-    if not edited_df.equals(df):
-        if "table" in edited_df.columns:
-            edited_df["table"] = edited_df["table"].astype(str)
-        edited_df.to_csv(csv_path, index=False)
-        st.success("Guest list updated!")
-
-    # Replace CSV upload
-    uploaded = st.file_uploader("Or upload a new CSV to replace guest list", type="csv", key="replace_csv")
-    if uploaded:
-        with open(csv_path, "wb") as f:
-            f.write(uploaded.getbuffer())
-        df = pd.read_csv(csv_path)
-        if "table" in df.columns:
-            df["table"] = df["table"].astype(str)
-        st.success("Guest list replaced!")
-
-    # QR code for guests
-    guest_url = f"{BASE_URL}/?event={event_id}"
-    qr = qrcode.QRCode(version=1, box_size=10, border=4)
-    qr.add_data(guest_url)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-
-    st.markdown("### QR Code for Guests")
-    st.image(buf, caption="Scan QR code", width=250)
-    st.download_button(
-        label="Download QR code",
-        data=buf.getvalue(),
-        file_name=f"event_{event_id}_qr.png",
-        mime="image/png"
-    )
-
-    # Download CSV
-    with open(csv_path, "rb") as f:
-        csv_bytes = f.read()
-    st.download_button(
-        label="Download guest list CSV",
-        data=csv_bytes,
-        file_name=f"event_{event_id}_guests.csv",
-        mime="text/csv"
-    )
+        # -----------------------
+        # Edit table prefix
+        # -----------------------
+        "Use this to edit what the guests see before their table. For example, instead of \"Table 1\", they would see \"Room 1\" if it was set to \"Room\""
+        new_table_prefix = st.text_input("Edit table prefix:", value=meta.get("table_prefix", "Table"))
+        if new_table_prefix != meta["table_prefix"]:
+            meta["table_prefix"] = new_table_prefix
+            s3.put_object(
+                Bucket=BUCKET,
+                Key=meta_key,
+                Body=json.dumps(meta),
+            )
+            st.success("Table prefix updated!")
+            st.rerun()
 
     # Delete event
-    confirm = st.checkbox("Confirm deletion of this event permanently")
-    if confirm and st.button("Delete event"):
-        if os.path.exists(csv_path):
-            os.remove(csv_path)
-        if os.path.exists(meta_path):
-            os.remove(meta_path)
-        st.success("Event deleted!")
-        st.stop()
+    st.divider()
+    delete = st.expander("Delete Event")
+    with delete:
+        st.error("**This is permanent and cannot be undone**")
+        confirm = st.text_input("Type the name of your event to confirm deletion", key="open_delete_menu")
+        if confirm == meta["title"]:
+            r2_delete_event(event_id)
+            st.success("Event deleted")
+            del st.query_params["event"]
+            del st.query_params["token"]
+            st.rerun()
+    st.stop()
 
-# -----------------------
+# ============================================================
 # GUEST LOOKUP
-# -----------------------
-with open(csv_path, mode="r", newline="", encoding="utf-8") as file:
-    reader = csv.DictReader(file)
-    guests = list(reader)
-    # ensure table is string
-    for g in guests:
-        g["table"] = str(g.get("table", ""))
+# ============================================================
+csv_data = s3.get_object(Bucket=BUCKET, Key=csv_key)["Body"].read()
+guests = list(csv.DictReader(io.StringIO(csv_data.decode())))
+for g in guests:
+    g["table"] = str(g.get("table", ""))
 
-def find_by_last_name(last_name):
-    return [g for g in guests if last_name.lower() in g["last_name"].lower()]
+# Map internal to friendly column headers for display
+friendly_cols = {"first_name": "First Name", "last_name": "Last Name", "table": "Table"}
 
-def find_by_first_name(first_name):
-    return [g for g in guests if first_name.lower() in g["first_name"].lower()]
-
+search_by_first = st.toggle("Search by first name")
 if "name_val" not in st.session_state:
     st.session_state.name_val = ""
 
-search_by_first = st.checkbox("Search by first name")
+# Get table prefix from metadata
+table_prefix = meta.get("table_prefix", "Table")
 
 if search_by_first:
     name_input = st.text_input(
@@ -253,20 +519,35 @@ if search_by_first:
         value=st.session_state.name_val,
         key="first_name_input"
     )
-    matches = find_by_first_name(name_input)
+    matches = find_by_first_name_fuzzy(name_input, 0.7) if len(name_input) >= 2 else []
 else:
     name_input = st.text_input(
         "Your last name:",
         value=st.session_state.name_val,
         key="last_name_input"
     )
-    matches = find_by_last_name(name_input)
+    matches = find_by_last_name_fuzzy(name_input, 0.7) if len(name_input) >= 2 else []
 
 st.session_state.name_val = name_input
 
+# -----------------------
+# Display guest results with table prefix
+# -----------------------
 if name_input:
     if matches:
-        for guest in matches[:5]:
-            st.write(f"**{guest['first_name']} {guest['last_name']}** — Table {guest['table']}")
+        for guest in matches:
+            raw_table = guest["table"].strip()
+
+            if raw_table:
+                if table_prefix and raw_table.isdigit():
+                    display_table = f"{table_prefix} {raw_table}"
+                else:
+                    display_table = raw_table
+            else:
+                display_table = ""
+
+            st.write(
+                f"**{guest['first_name']} {guest['last_name']}** — {display_table}"
+            )
     else:
         st.warning("No matches found.")
