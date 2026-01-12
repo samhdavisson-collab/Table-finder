@@ -443,28 +443,54 @@ if is_admin:
             st.session_state.df = edited_internal
             time.sleep(0.5)
             saving.toast("Saved!", icon="✅", duration=2)
-
+        if "uploadedval" not in st.session_state:
+            st.session_state.uploadedval = 0
+            print("hello")
         # Replace CSV while remembering column mapping
-        uploaded_replace = st.file_uploader("Or upload a new CSV to replace guest list", type="csv")
+        uploaded_replace = st.file_uploader("Or upload a new CSV to replace guest list", type="csv", key=str(st.session_state.uploadedval))
         if uploaded_replace:
             df_new = pd.read_csv(uploaded_replace)
-            column_mapping = meta.get("column_mapping", {"first_name":"first_name","last_name":"last_name","table":"table"})
-            df_new = df_new.rename(columns={
-                column_mapping["first_name"]: "first_name",
-                column_mapping["last_name"]: "last_name",
-                column_mapping["table"]: "table"
-            })
-            if "table" in df_new.columns:
-                df_new["table"] = df_new["table"].astype(str)
-            df_new = df_new.reset_index(drop=True)
+            st.write("Detected columns:", list(df_new.columns))
+            first_col = st.selectbox("Select the first name column:", df_new.columns, index=0)
+            last_col = st.selectbox("Select the last name column:", df_new.columns, index=1)
+            table_col = st.selectbox("Select the table column:", df_new.columns, index=2)
 
-            s3.put_object(
-                Bucket=BUCKET,
-                Key=csv_key,
-                Body=df_new.to_csv(index=False)
-            )
-            st.session_state.df = df_new
-            st.success("Guest list replaced")
+            if st.button("Update"):
+                meta["column_mapping"] = {
+                    "first_name": first_col,
+                    "last_name": last_col,
+                    "table": table_col
+                }
+                # Rename columns internally
+                df_new = df_new.rename(columns={
+                    first_col: "first_name",
+                    last_col: "last_name",
+                    table_col: "table"
+                })
+
+                if "table" in df_new.columns:
+                    df_new["table"] = df_new["table"].astype(str)
+                df_new = df_new.reset_index(drop=True)
+                column_mapping = meta.get("column_mapping", {"first_name":"first_name","last_name":"last_name","table":"table"})
+                if "table" in df_new.columns:
+                    df_new["table"] = df_new["table"].astype(str)
+                df_new = df_new.reset_index(drop=True)
+
+                s3.put_object(
+                    Bucket=BUCKET,
+                    Key=csv_key,
+                    Body=df_new.to_csv(index=False)
+                )
+                s3.put_object(
+                    Bucket=BUCKET,
+                    Key=meta_key,
+                    Body=json.dumps(meta),
+                )
+                st.session_state.df = df_new
+                st.toast("Guest list replaced")
+                st.session_state.uploadedval += 1
+                # uploaded_replace = st.file_uploader("Or upload a new CSV to replace guest list", type="csv", key="newfileuploader")
+                st.rerun()
 
         # -----------------------
         # Edit table prefix
