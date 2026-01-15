@@ -1,53 +1,50 @@
 from datetime import date, datetime
-
-import boto3
-from botocore.client import Config
 import os
 import json
 
+import boto3
+from botocore.client import Config
+
+# Load .env locally (ignored in GitHub Actions)
 if os.path.exists(".env"):
     from dotenv import load_dotenv
     load_dotenv()
 
-
+# -----------------------------
+# Environment
+# -----------------------------
 ACCOUNT_ID = os.environ["R2_ACCOUNT_ID"]
 BUCKET_NAME = os.environ["R2_BUCKET"]
 
-import boto3
-import os
-
-account_id = os.environ["R2_ACCOUNT_ID"]
-
+# -----------------------------
+# R2 S3 client (IMPORTANT CONFIG)
+# -----------------------------
 s3 = boto3.client(
     "s3",
-    endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+    endpoint_url=f"https://{ACCOUNT_ID}.r2.cloudflarestorage.com",
     aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
     aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
     region_name="auto",
+    config=Config(
+        signature_version="s3v4",
+        s3={"addressing_style": "path"},  # REQUIRED for R2
+        retries={"max_attempts": 3, "mode": "standard"},
+    ),
 )
-# s3 = boto3.client(
-#     "s3",
-#     endpoint_url=R2_ENDPOINT,
-#     aws_access_key_id=ACCESS_KEY,
-#     aws_secret_access_key=SECRET_KEY,
-#     region_name="auto",  # must be set for botocore
-#     config=Config(
-#         signature_version="s3v4",
-#         s3={"addressing_style": "path"},  # path-style required for R2
-#         retries={"max_attempts": 3, "mode": "standard"},
-#     ),
-# )
 
-# Quick test to verify connection
+# -----------------------------
+# Connection test
+# -----------------------------
 try:
-    buckets = s3.list_buckets()
-    print("✅ Connected to R2 buckets:", [b['Name'] for b in buckets['Buckets']])
+    s3.list_buckets()
+    print("✅ Connected to Cloudflare R2")
 except Exception as e:
-    print("❌ Connection failed:", e)
+    print("❌ Failed to connect to R2:", e)
     raise
 
-
-
+# -----------------------------
+# Date
+# -----------------------------
 TODAY = date.today()
 print(f"🕒 Today is {TODAY}")
 
@@ -55,7 +52,7 @@ print(f"🕒 Today is {TODAY}")
 # Helpers
 # -----------------------------
 def list_meta_files():
-    """Find all meta.json files under events/"""
+    """Yield all events/**/meta.json files"""
     paginator = s3.get_paginator("list_objects_v2")
 
     for page in paginator.paginate(Bucket=BUCKET_NAME, Prefix="events/"):
@@ -79,12 +76,10 @@ def delete_prefix(prefix):
         print("⚠️  Nothing found to delete")
         return
 
-    # Delete in batches of 1000 (S3 limit)
     for i in range(0, len(to_delete), 1000):
-        batch = to_delete[i : i + 1000]
         s3.delete_objects(
             Bucket=BUCKET_NAME,
-            Delete={"Objects": batch},
+            Delete={"Objects": to_delete[i:i + 1000]},
         )
 
     print(f"✅ Deleted {len(to_delete)} objects")
@@ -124,7 +119,6 @@ for meta_key in list_meta_files():
         print("⏭️  SKIP: delete_after is in the future")
         continue
 
-    # Determine event folder
     prefix = meta_key.rsplit("/", 1)[0] + "/"
     print(f"🔥 DELETE triggered for event prefix: {prefix}")
 
