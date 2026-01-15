@@ -5,25 +5,36 @@ from botocore.client import Config
 import os
 import json
 
+if os.path.exists(".env"):
+    from dotenv import load_dotenv
+    load_dotenv()
+
+
 ACCOUNT_ID = os.environ["R2_ACCOUNT_ID"]
 ACCESS_KEY = os.environ["R2_ACCESS_KEY_ID"]
 SECRET_KEY = os.environ["R2_SECRET_ACCESS_KEY"]
 BUCKET_NAME = os.environ["R2_BUCKET"]
 
 R2_ENDPOINT = f"https://{ACCOUNT_ID}.r2.cloudflarestorage.com"
-
 s3 = boto3.client(
     "s3",
-    endpoint_url=R2_ENDPOINT,
+    endpoint_url=f"https://{ACCOUNT_ID}.r2.cloudflarestorage.com",
     aws_access_key_id=ACCESS_KEY,
     aws_secret_access_key=SECRET_KEY,
-    region_name="auto",  # must be set for botocore
-    config=Config(
-        signature_version="s3v4",
-        s3={"addressing_style": "path"},  # path-style required for R2
-        retries={"max_attempts": 3, "mode": "standard"},
-    ),
+    region_name="auto",
 )
+# s3 = boto3.client(
+#     "s3",
+#     endpoint_url=R2_ENDPOINT,
+#     aws_access_key_id=ACCESS_KEY,
+#     aws_secret_access_key=SECRET_KEY,
+#     region_name="auto",  # must be set for botocore
+#     config=Config(
+#         signature_version="s3v4",
+#         s3={"addressing_style": "path"},  # path-style required for R2
+#         retries={"max_attempts": 3, "mode": "standard"},
+#     ),
+# )
 
 # Quick test to verify connection
 try:
