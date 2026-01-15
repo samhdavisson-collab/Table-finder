@@ -1,7 +1,9 @@
-import boto3
-from botocore.config import Config
-import os
 from datetime import date, datetime
+
+import boto3
+from botocore.client import Config
+import os
+import json
 
 ACCOUNT_ID = os.environ["R2_ACCOUNT_ID"]
 ACCESS_KEY = os.environ["R2_ACCESS_KEY_ID"]
@@ -15,12 +17,23 @@ s3 = boto3.client(
     endpoint_url=R2_ENDPOINT,
     aws_access_key_id=ACCESS_KEY,
     aws_secret_access_key=SECRET_KEY,
-    region_name="auto",  # REQUIRED for botocore
+    region_name="auto",  # must be set for botocore
     config=Config(
         signature_version="s3v4",
-        s3={"addressing_style": "path"},
+        s3={"addressing_style": "path"},  # path-style required for R2
+        retries={"max_attempts": 3, "mode": "standard"},
     ),
 )
+
+# Quick test to verify connection
+try:
+    buckets = s3.list_buckets()
+    print("✅ Connected to R2 buckets:", [b['Name'] for b in buckets['Buckets']])
+except Exception as e:
+    print("❌ Connection failed:", e)
+    raise
+
+
 
 TODAY = date.today()
 print(f"🕒 Today is {TODAY}")
