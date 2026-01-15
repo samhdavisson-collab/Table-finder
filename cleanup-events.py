@@ -11,16 +11,18 @@ if os.path.exists(".env"):
 
 
 ACCOUNT_ID = os.environ["R2_ACCOUNT_ID"]
-ACCESS_KEY = os.environ["R2_ACCESS_KEY_ID"]
-SECRET_KEY = os.environ["R2_SECRET_ACCESS_KEY"]
 BUCKET_NAME = os.environ["R2_BUCKET"]
 
-R2_ENDPOINT = f"https://{ACCOUNT_ID}.r2.cloudflarestorage.com"
+import boto3
+import os
+
+account_id = os.environ["R2_ACCOUNT_ID"]
+
 s3 = boto3.client(
     "s3",
-    endpoint_url=f"https://{ACCOUNT_ID}.r2.cloudflarestorage.com",
-    aws_access_key_id=ACCESS_KEY,
-    aws_secret_access_key=SECRET_KEY,
+    endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+    aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+    aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
     region_name="auto",
 )
 # s3 = boto3.client(
