@@ -13,11 +13,24 @@ ACCOUNT_ID = os.environ["R2_ACCOUNT_ID"]
 
 ENDPOINT_URL = f"https://{ACCOUNT_ID}.r2.cloudflarestorage.com"
 
+from botocore.config import Config
+import boto3
+import os
+
+R2_ACCOUNT_ID = os.environ["R2_ACCOUNT_ID"]
+R2_ACCESS_KEY_ID = os.environ["R2_ACCESS_KEY_ID"]
+R2_SECRET_ACCESS_KEY = os.environ["R2_SECRET_ACCESS_KEY"]
+
 s3 = boto3.client(
     "s3",
-    endpoint_url=ENDPOINT_URL,
-    aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
-    aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+    endpoint_url=f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+    aws_access_key_id=R2_ACCESS_KEY_ID,
+    aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+    region_name="auto",
+    config=Config(
+        signature_version="s3v4",
+        retries={"max_attempts": 5},
+    ),
 )
 
 TODAY = date.today()
