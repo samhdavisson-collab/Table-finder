@@ -25,7 +25,7 @@ st.markdown(
 # -----------------------
 # CONFIG
 # -----------------------
-BASE_URL = "https://table-finder.streamlit.app"  # replace with your deployed URL
+BASE_URL = "localhost:8501"#"https://table-finder.streamlit.app"  # replace with your deployed URL
 BUCKET = st.secrets["R2_BUCKET"]
 
 # -----------------------
@@ -42,6 +42,21 @@ s3 = boto3.client(
 # -----------------------
 # HELPERS
 # -----------------------
+@st.cache_data(ttl=60)
+def load_csv_from_r2(bucket, key):
+    csv_bytes = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+    df = pd.read_csv(io.BytesIO(csv_bytes))
+    if "table" in df.columns:
+        df["table"] = df["table"].astype(str)
+    return df.reset_index(drop=True)
+
+
+@st.cache_data(ttl=60)
+def load_meta_from_r2(bucket, key):
+    return json.loads(
+        s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+    )
+
 def make_wifi_qr(ssid, password, security="WPA"):
     if not password:
         security = "nopass"
@@ -123,24 +138,24 @@ if not event_id:
            - Enter your event title.
            - Upload a CSV file with your guests. The CSV file should include first name, last name, and table columns (any column names are fine; you will map them).
            - You can also click "Create a blank list" to create without uploading a CSV file.
+           - Set a time for the event to get automatically deleted.
+           - Map the columns so the names appear correctly.
            - Click 'Create Event' to generate your event.
-           - A QR code and guest/admin links will be generated automatically.
-           - **Download your Admin File to recover the event later if you close the page**.
+           - *IMPORTANT: You will not be able to get back to the Admin Page without downloading the admin file.*
 
         2. **Admin Page**
-           - Use the admin link or upload your Admin File in the 'Admin Login' tab.
-           - Edit guest lists, tables, or event title.
-           - Download the guest CSV file or QR code at any time.
-           - Delete the event when you are done (permanent).
+           - Upload your Admin File in the 'Admin Login' tab if you lose the page.
+           - Edit the guest list, event title, or deletion date.
+           - Generate a QR code for the WiFi and guest lookup.
+           - Download a guest list PDF to put up for guests who don't have phones.
 
         3. **Guest Lookup**
-           - Guests can use the QR code or guest link.
+           - Use the QR code or guest link.
            - Search by first or last name.
-           - See their table assignments.
+           - See table assignments.
 
         **Tips:**
         - Always keep your Admin File safe.
-        - Column mapping is not remembered if you upload a new CSV file later.
         - Tables can be numbers or names (like "A", "B", "Family Table", "1").
         """)
     with adminpage:
@@ -159,76 +174,6 @@ if not event_id:
 
         if blank:
             df = pd.DataFrame(columns=["first_name", "last_name", "table"])
-            # if st.button("Create Event"):
-            #     event_id = uuid.uuid4().hex[:6]
-            #     creator_token = secrets.token_hex(4)
-            #
-            #     # Save CSV to R2
-            #     s3.put_object(
-            #         Bucket=BUCKET,
-            #         Key=r2_key(event_id, "guests.csv"),
-            #         Body=df.to_csv(index=False),
-            #     )
-            #
-            #     # Save metadata with column mapping
-            #     meta = {
-            #         "title": title or "Untitled Event",
-            #         "created": time.time(),
-            #         "creator_token": creator_token,
-            #         "column_mapping": {
-            #             "first_name": "first_name",
-            #             "last_name": "last_name",
-            #             "table": "table"
-            #         },
-            #         "table_prefix": "Table"
-            #     }
-            #     s3.put_object(
-            #         Bucket=BUCKET,
-            #         Key=r2_key(event_id, "meta.json"),
-            #         Body=json.dumps(meta),
-            #     )
-            #
-            #     # Generate URLs
-            #     guest_url = f"{BASE_URL}/?event={event_id}"
-            #     admin_url = f"{BASE_URL}/?event={event_id}&token={creator_token}"
-            #
-            #     # QR code
-            #     qr = qrcode.make(guest_url)
-            #     buf = io.BytesIO()
-            #     qr.save(buf, format="PNG")
-            #     buf.seek(0)
-            #
-            #     # Display QR and links
-            #     st.success("Event created!")
-            #     st.image(buf, width=250)
-            #     st.download_button(
-            #         label="Download QR code",
-            #         data=buf.getvalue(),
-            #         file_name="qr.png",
-            #         mime="image/png"
-            #     )
-            #     st.markdown(f"**Guest link:** {guest_url}")
-            #     st.markdown(f"**Admin link:** {admin_url}")
-            #
-            #     # Generate safe file
-            #     safe_file = {
-            #         "event_id": event_id,
-            #         "creator_token": creator_token,
-            #         "title": meta["title"],
-            #         "table_prefix": meta["table_prefix"]
-            #     }
-            #     safe_bytes = json.dumps(safe_file, indent=2).encode("utf-8")
-            #     st.download_button(
-            #         label="Download Admin File",
-            #         data=safe_bytes,
-            #         file_name=f"event_{event_id}_admin.json",
-            #         mime="application/json"
-            #     )
-            #
-            #     # Redirect to admin page
-            #     st.query_params["event"] = event_id
-            #     st.query_params["token"] = creator_token
-            #     st.rerun()
 
         if blank or uploaded:
             # -----------------------
@@ -253,13 +198,6 @@ if not event_id:
                 df = df.reset_index(drop=True)
             from datetime import date
 
-            # delete_after = meta.get("delete_after")  # stored as YYYY-MM-DD string
-            # delete_after_date = (
-            #     date.fromisoformat(delete_after)
-            #     if delete_after
-            #     else None
-            # )
-
             picked_date = st.date_input(
                 "Automatically delete this event after:",
                 value=date.today(),
@@ -268,12 +206,7 @@ if not event_id:
 
             if picked_date:# != delete_after_date:
                 delete_after = picked_date.isoformat()
-                # s3.put_object(
-                #     Bucket=BUCKET,
-                #     Key=meta_key,
-                #     Body=json.dumps(meta),
-                # )
-                st.toast(f"Event will be deleted after {picked_date}")
+                st.toast(f"Event will be deleted after {picked_date}", icon="⏰")
 
             if st.button("Create Event"):
                 event_id = uuid.uuid4().hex[:6]
@@ -285,6 +218,7 @@ if not event_id:
                     Key=r2_key(event_id, "guests.csv"),
                     Body=df.to_csv(index=False),
                 )
+                load_csv_from_r2.clear()
 
                 # Save metadata with column mapping
                 if uploaded:
@@ -318,6 +252,7 @@ if not event_id:
                     Key=r2_key(event_id, "meta.json"),
                     Body=json.dumps(meta),
                 )
+                load_meta_from_r2.clear()
 
                 # Generate URLs
                 guest_url = f"{BASE_URL}/?event={event_id}"
@@ -368,12 +303,16 @@ csv_key = r2_key(event_id, "guests.csv")
 meta_key = r2_key(event_id, "meta.json")
 
 if not r2_exists(csv_key) or not r2_exists(meta_key):
+    # st.error("Event does not exist", icon="⚠️")
+    if event_id:
+        st.query_params.clear()
+        st.rerun()
     st.stop()
 
-meta = json.loads(s3.get_object(Bucket=BUCKET, Key=meta_key)["Body"].read())
+meta = load_meta_from_r2(BUCKET, meta_key)
 is_admin = token == meta["creator_token"]
 
-st.header(meta["title"])
+st.header(f"Creator/Admin page for \"{meta['title']}\" event")
 st.caption(f"Event ID: {event_id}")
 
 # ============================================================
@@ -396,11 +335,10 @@ if is_admin:
     #
     # if st.sidebar.button("Delete event"):
     #     st.session_state.admin_page = "delete"
-    st.warning("Creator/Admin Page")
+    #st.warning("Creator/Admin Page")
 
     # Download admin safe file
 
-    "Use this to recover this page if you accidentally close it"
     safe_file = {
         "event_id": event_id,
         "creator_token": token,
@@ -408,13 +346,18 @@ if is_admin:
         "table_prefix": meta.get("table_prefix", "Table")
     }
     safe_bytes = json.dumps(safe_file, indent=2).encode("utf-8")
+    # st.divider()
+    st.info("***IMPORTANT!*** Use this to recover if you close the tab")
     st.download_button(
-        label="Download Admin Recover File",
+        label="**Download Admin Recover File**",
         data=safe_bytes,
         file_name=f"{meta.get('title')}_admin.json",
-        mime="application/json"
+        mime="application/json",
+        type="primary",
+        help="***Do this!***"
     )
-
+    #st.warning("Use this to recover if you close the tab")
+    st.divider()
     share = st.expander("Share event")
     with share:
         # Guest URL & QR
@@ -457,7 +400,9 @@ if is_admin:
                 Key=meta_key,
                 Body=json.dumps(meta),
             )
-            st.toast(f"Event will be deleted after {picked_date}")
+            load_meta_from_r2.clear()
+
+            st.toast(f"Event will be deleted after {picked_date}", icon="⏰")
         # Edit event title
         new_title = st.text_input("Edit event title:", value=meta["title"])
         if new_title != meta["title"]:
@@ -467,13 +412,13 @@ if is_admin:
                 Key=meta_key,
                 Body=json.dumps(meta),
             )
+            load_meta_from_r2.clear()
             st.toast("Event title updated!")
             st.rerun()
 
         # Load CSV
         if "df" not in st.session_state:
-            csv_data = s3.get_object(Bucket=BUCKET, Key=csv_key)["Body"].read()
-            df = pd.read_csv(io.BytesIO(csv_data))
+            df = load_csv_from_r2(BUCKET, csv_key)
             if "table" in df.columns:
                 df["table"] = df["table"].astype(str)
             df = df.reset_index(drop=True)
@@ -514,6 +459,7 @@ if is_admin:
                 Key=csv_key,
                 Body=edited_internal.to_csv(index=False),
             )
+            load_csv_from_r2.clear()
 
             st.session_state.df = edited_internal
             time.sleep(1)
@@ -560,6 +506,8 @@ if is_admin:
                     Key=meta_key,
                     Body=json.dumps(meta),
                 )
+                load_csv_from_r2.clear()
+                load_meta_from_r2.clear()
                 st.session_state.df = df_new
                 st.toast("Guest list replaced")
                 st.session_state.uploadedval += 1
@@ -578,6 +526,7 @@ if is_admin:
                 Key=meta_key,
                 Body=json.dumps(meta),
             )
+            load_meta_from_r2.clear()
             st.success("Table prefix updated!")
             st.rerun()
     wifi_qr = st.expander("WiFi QR Code")
@@ -607,7 +556,157 @@ if is_admin:
                 file_name="wifi_qr.png",
                 mime="image/png"
             )
+    printout = st.expander("Print Guest List")
+    with printout:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas
 
+        # Fetch CSV bytes from S3
+        df = load_csv_from_r2(BUCKET, csv_key)
+        if not df.empty:
+            sort = st.radio("Sort By:", ["First Name", "Last Name", "None"])
+            if sort == "First Name" or sort == "None":
+                name_arrange = st.radio("Name Arrangement: ", [f"{df.iloc[0]['first_name']} {df.iloc[0]['last_name']}", f"{df.iloc[0]['last_name']}, {df.iloc[0]['first_name']}"])
+            if sort == "Last Name":
+                name_arrange = st.radio("Name Arrangement: ", [f"{df.iloc[0]['first_name']} {df.iloc[0]['last_name']}", f"{df.iloc[0]['last_name']}, {df.iloc[0]['first_name']}"], index=1)
+
+            # CSV is already loaded in df
+            if sort == "First Name":
+                df_sorted = df.sort_values("first_name")  # sort alphabetically
+            elif sort == "Last Name":
+                df_sorted = df.sort_values("last_name")
+            elif sort == "None":
+                df_sorted = df
+
+            guests_per_page = 9999999999999999999999999999
+            pages = [df_sorted.iloc[i:i + guests_per_page] for i in range(0, len(df_sorted), guests_per_page)]
+
+            pdf_buffer = io.BytesIO()
+            c = canvas.Canvas(pdf_buffer, pagesize=letter)
+            width, height = letter
+            table_prefix = meta.get("table_prefix", "Table")
+            # ----- Layout constants -----
+            LEFT_X = 50
+            TABLE_X = 260
+            MAX_NAME_WIDTH = TABLE_X - LEFT_X - 10
+            BOTTOM_MARGIN = 80
+
+            page_number = 1
+
+            for page in pages:
+                last_letter = None
+
+                # ----- Page header -----
+                c.setFont("Helvetica-Bold", 20)
+                c.drawCentredString(width / 2, height - 40, meta["title"])
+                c.line(50, height - 60, width - 50, height - 60)
+
+                y = height - 90  # start content below title
+
+                for idx, row in page.iterrows():
+                    # ----- Page overflow check -----
+                    if y < BOTTOM_MARGIN:
+                        c.setFont("Helvetica-Oblique", 8)
+                        c.drawRightString(width - 20, 20, str(page_number))
+                        c.drawString(50, 20, "Made with TableFinder")
+                        c.showPage()
+                        page_number += 1
+                        last_letter = None
+
+                        c.setFont("Helvetica-Bold", 20)
+                        c.drawCentredString(width / 2, height - 40, meta["title"])
+                        c.line(50, height - 60, width - 50, height - 60)
+                        y = height - 90
+
+                    # ----- Safe string conversion -----
+                    first_name = str(row.get("first_name", "")).strip()
+                    last_name = str(row.get("last_name", "")).strip()
+                    table_raw = str(row.get("table", "")).strip()
+
+                    # ----- Alphabet key -----
+                    key_name = last_name if sort == "Last Name" else first_name
+                    current_letter = key_name[:1].upper() if key_name else "#"
+
+                    # ----- Alphabet header -----
+                    if current_letter != last_letter:
+                        if y < BOTTOM_MARGIN + 40:
+                            c.showPage()
+                            page_number += 1
+                            last_letter = None
+                            y = height - 90
+
+                        c.setFont("Helvetica-Bold", 14)
+                        c.drawString(LEFT_X, y, current_letter)
+                        y -= 12
+                        c.line(LEFT_X, y, width - 50, y)
+                        y -= 18
+                        last_letter = current_letter
+
+                    # ----- Build display name -----
+                    if name_arrange == f"{df.iloc[0]['first_name']} {df.iloc[0]['last_name']}":
+                        name_text = f"{first_name} {last_name}"
+                    else:
+                        name_text = f"{last_name}, {first_name}"
+
+                    # ----- Truncate long names safely -----
+                    c.setFont("Helvetica-Bold", 12)
+                    while c.stringWidth(name_text, "Helvetica-Bold", 12) > MAX_NAME_WIDTH:
+                        name_text = name_text[:-1]
+                        if len(name_text) == 0:
+                            break
+                    if c.stringWidth(name_text, "Helvetica-Bold", 12) > MAX_NAME_WIDTH:
+                        name_text = name_text[:-1] + "…"
+
+                    name_width = c.stringWidth(name_text, "Helvetica-Bold", 12)
+
+                    # ----- Table label -----
+                    if table_raw:
+                        if table_prefix and table_raw.isdigit():
+                            table_text = f"{table_prefix} {table_raw}"
+                        else:
+                            table_text = table_raw
+                    else:
+                        table_text = ""
+
+                    table_width = c.stringWidth(table_text, "Helvetica", 12)
+
+                    # ----- Draw name -----
+                    c.setFont("Helvetica-Bold", 12)
+                    c.drawString(LEFT_X, y, name_text)
+
+                    # ----- Dot leaders -----
+                    if table_text:
+                        available = TABLE_X - (LEFT_X + name_width)
+                        dot_width = c.stringWidth(".", "Helvetica", 12)
+                        dots = "." * max(0, int(available / dot_width))
+
+                        c.setFont("Helvetica", 12)
+                        c.drawString(LEFT_X + name_width, y, dots)
+
+                        # ----- Draw table -----
+                        c.drawString(TABLE_X, y, table_text)
+
+                    y -= 20  # spacing between guests
+
+                # ----- Footer -----
+                c.setFont("Helvetica-Oblique", 8)
+                c.drawString(50, 20, "Made with TableFinder")
+                c.drawRightString(width - 20, 20, str(page_number))
+                c.showPage()
+                page_number += 1
+
+            c.save()
+            pdf_bytes = pdf_buffer.getvalue()
+
+            # --- Streamlit download button ---
+            st.download_button(
+                label="Download Guest List PDF",
+                data=pdf_bytes,
+                file_name="guest_list.pdf",
+                mime="application/pdf"
+            )
+        else:
+            st.info("Add guests to generate the PDF")
     # Delete event
     st.divider()
     delete = st.expander("Delete Event")
@@ -625,8 +724,8 @@ if is_admin:
 # ============================================================
 # GUEST LOOKUP
 # ============================================================
-csv_data = s3.get_object(Bucket=BUCKET, Key=csv_key)["Body"].read()
-guests = list(csv.DictReader(io.StringIO(csv_data.decode())))
+df = load_csv_from_r2(BUCKET, csv_key)
+guests = df.to_dict(orient="records")
 for g in guests:
     g["table"] = str(g.get("table", ""))
 
