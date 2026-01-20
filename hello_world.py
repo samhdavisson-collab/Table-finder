@@ -25,7 +25,7 @@ st.markdown(
 # -----------------------
 # CONFIG
 # -----------------------
-BASE_URL = "localhost:8501"#"https://table-finder.streamlit.app"  # replace with your deployed URL
+BASE_URL = "https://table-finder.streamlit.app"  # replace with your deployed URL
 BUCKET = st.secrets["R2_BUCKET"]
 
 # -----------------------
