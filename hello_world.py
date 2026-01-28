@@ -4,7 +4,6 @@ import boto3
 import uuid
 import json
 import secrets
-import csv
 import io
 import qrcode
 # from PIL import Image
@@ -312,7 +311,10 @@ if not r2_exists(csv_key) or not r2_exists(meta_key):
 meta = load_meta_from_r2(BUCKET, meta_key)
 is_admin = token == meta["creator_token"]
 
-st.header(f"Creator/Admin page for \"{meta['title']}\" event")
+if is_admin:
+    st.header(f"Creator/Admin page for \"{meta['title']}\" event")
+else:
+    st.header(meta["title"])
 st.caption(f"Event ID: {event_id}")
 
 # ============================================================
