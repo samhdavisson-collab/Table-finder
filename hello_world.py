@@ -358,6 +358,7 @@ if is_admin:
         type="primary",
         help="***Do this!***"
     )
+    st.link_button("Support me!", "https://buymeacoffee.com/samdavisson", type="primary")
     #st.warning("Use this to recover if you close the tab")
     st.divider()
     share = st.expander("Share event")
@@ -709,6 +710,8 @@ if is_admin:
             )
         else:
             st.info("Add guests to generate the PDF")
+    # with st.expander("Support Me!"):
+    #     st.components.v1.html('<script data-name="BMC-Widget" data-cfasync="false" src="https://cdnjs.buymeacoffee.com/1.0.0/widget.prod.min.js" data-id="samdavisson" data-description="Support me on Buy me a coffee!" data-message="Please help to support more websites like this." data-color="#5F7FFF" data-position="Right" data-x_margin="18" data-y_margin="18"></script>', height=500, width=500)
     # Delete event
     st.divider()
     delete = st.expander("Delete Event")
