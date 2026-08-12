@@ -538,7 +538,7 @@ if is_admin:
         # "Your Wi-Fi name and password are used only to generate the QR code. "
         # "They are never saved, logged, or stored."
         #              )
-        st.caption("Your Wi-Fi information is used locally to generate the QR code."
+        st.caption("Your Wi-Fi information is used locally to generate the QR code. "
         "It is never saved, logged, or stored.")
         ssid = st.text_input("Wi-Fi Network Name (SSID)")
         password = st.text_input("Wi-Fi Password", type="password")
